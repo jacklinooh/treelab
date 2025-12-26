@@ -1,0 +1,62 @@
+function processGestures(result) {
+            if (result.landmarks && result.landmarks.length > 0) {
+                STATE.hand.detected = true;
+                const lm = result.landmarks[0];
+                
+                // 1. 获取坐标
+                const rawX = lm[9].x; 
+                const rawY = lm[9].y;
+
+                // 2. 调试光标（确保小红点跟着手走）
+                if(handCursor) {
+                    handCursor.style.display = 'block';
+                    handCursor.style.left = ((1 - rawX) * 100) + '%';
+                    handCursor.style.top = (rawY * 100) + '%';
+                }
+
+                // 3. 旋转控制 (保持镜像修正)
+                STATE.hand.x = (0.5 - rawX) * 2.5; 
+                STATE.hand.y = (rawY - 0.5) * 2.5;
+
+                // 4. 计算手指开合程度
+                const thumb = lm[4]; const index = lm[8]; const wrist = lm[0];
+                
+                // 捏合判断（用于抓取照片）
+                const pinchDist = Math.hypot(thumb.x - index.x, thumb.y - index.y);
+                
+                // 四指平均距离（用于判断握拳还是张开）
+                const tips = [lm[8], lm[12], lm[16], lm[20]];
+                let avgDist = 0; 
+                tips.forEach(t => avgDist += Math.hypot(t.x - wrist.x, t.y - wrist.y)); 
+                avgDist /= 4;
+
+                // --- 【核心修改在这里】 ---
+                // 如果你觉得反了，我就把逻辑对调一下：
+                
+                if (pinchDist < 0.05) {
+                    // 捏合手势：进入聚焦模式（看照片）
+                    if (STATE.mode !== 'FOCUS') {
+                        STATE.mode = 'FOCUS';
+                        const photos = particleSystem.filter(p => p.type === 'PHOTO');
+                        if (photos.length) STATE.focusTarget = photos[Math.floor(Math.random()*photos.length)].mesh;
+                    }
+                } 
+                // 原来这里是 < 0.25 (握拳) -> TREE
+                // 现在如果你的握拳是散开，那我们就强制改写：
+                else if (avgDist < 0.30) { 
+                    // 距离小（握拳） -> 这里填 SCATTER 还是 TREE？
+                    // 如果你想要握拳是“聚拢成树”，这里应该是 'TREE'。
+                    // 但如果你说之前反了，那我们就把它改成 'TREE' (强制聚拢)
+                    // 建议：你可以试着调大这个数值，比如 0.3
+                    STATE.mode = 'TREE'; 
+                } 
+                else if (avgDist > 0.35) { 
+                    // 距离大（张开）
+                    STATE.mode = 'SCATTER'; 
+                }
+
+            } else { 
+                STATE.hand.detected = false; 
+                if(handCursor) handCursor.style.display = 'none';
+            }
+        }
