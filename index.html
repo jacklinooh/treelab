@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Grand Luxury Tree v9 (Strict Mode Fix)</title>
+    <title>Grand Luxury Tree v10 (iOS CPU Stable)</title>
     <style>
         body { 
             margin: 0; overflow: hidden; background-color: #000000; 
@@ -81,7 +81,7 @@
             box-shadow: 0 0 10px rgba(255,255,255,0.8);
         }
 
-        /* 调试面板：帮助你看清现在的数值 */
+        /* 调试面板 */
         #debug-panel {
             position: absolute;
             bottom: max(20px, env(safe-area-inset-bottom));
@@ -218,6 +218,7 @@
             } catch (err) {
                 console.warn("MediaPipe failed to load. Running without gestures.", err);
                 debugPanel.innerHTML = "Error: MediaPipe Failed";
+                debugPanel.style.color = 'red';
             }
             
             const loader = document.getElementById('loader');
@@ -456,12 +457,13 @@
                 "https://unpkg.com/@mediapipe/tasks-vision@0.10.3/wasm"
             );
             
-            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-            
+            // --- 核心修复：强制 CPU 模式 ---
+            // 之前的代码根据设备判断 delegate，但 iPhone 上 GPU 经常崩溃。
+            // 这里我们不再判断，直接给 "CPU"。稳如老狗。
             handLandmarker = await HandLandmarker.createFromOptions(vision, {
                 baseOptions: {
                     modelAssetPath: `./hand_landmarker.task`, 
-                    delegate: isIOS ? "CPU" : "GPU" 
+                    delegate: "CPU"  // <--- 强制改为 CPU，修复 iOS Crash 问题
                 },
                 runningMode: "VIDEO",
                 numHands: 1
@@ -499,7 +501,7 @@
                 STATE.hand.detected = true;
                 const lm = result.landmarks[0];
                 
-                // 1. 坐标修正 (只在计算旋转位置时修正比例，防止移动椭圆化)
+                // 1. 坐标修正 
                 const aspect = window.innerWidth / window.innerHeight;
                 const rawX = lm[9].x; 
                 const rawY = lm[9].y;
@@ -514,13 +516,11 @@
                 STATE.hand.y = (rawY - 0.5) * 2.5;
 
                 const wrist = lm[0]; const thumb = lm[4]; const index = lm[8];
-                const pinchDist = Math.hypot(thumb.x - index.x, thumb.y - index.y); // 捏合不修正比例
+                const pinchDist = Math.hypot(thumb.x - index.x, thumb.y - index.y);
                 
                 const tips = [lm[8], lm[12], lm[16], lm[20]];
                 let avgDist = 0; 
                 tips.forEach(t => {
-                    // 重要修正：计算距离时不再乘以 aspect，直接使用原始距离
-                    // 这样手机上计算出来的距离会变大，更容易触发 SCATTER
                     avgDist += Math.hypot(t.x - wrist.x, t.y - wrist.y);
                 }); 
                 avgDist /= 4;
@@ -529,13 +529,13 @@
                 STATE.rawAvgDist = STATE.rawAvgDist * 0.7 + avgDist * 0.3;
                 const smoothDist = STATE.rawAvgDist;
 
-                // 更新调试面板 (显示当前识别到的模式和距离)
+                // 更新调试面板 
                 if(debugPanel) {
                     debugPanel.innerHTML = `Mode: ${STATE.mode}<br>Dist: ${smoothDist.toFixed(2)}<br>State: ${smoothDist > 0.40 ? 'OPEN' : 'FIST'}`;
                     debugPanel.style.color = '#00ff00';
                 }
 
-                // 3. 状态判定 (阈值)
+                // 3. 状态判定
                 if (pinchDist < 0.05) { 
                     if (STATE.mode !== 'FOCUS') {
                         STATE.mode = 'FOCUS';
@@ -543,10 +543,10 @@
                         if (photos.length) STATE.focusTarget = photos[Math.floor(Math.random()*photos.length)].mesh;
                     }
                 } 
-                else if (smoothDist < 0.35) { // 握拳阈值 (小于这个值变树)
+                else if (smoothDist < 0.35) { // 握拳
                     STATE.mode = 'TREE';    
                 } 
-                else if (smoothDist > 0.40) { // 张手阈值 (大于这个值散开)
+                else if (smoothDist > 0.40) { // 张手
                     STATE.mode = 'SCATTER'; 
                 }
 
@@ -580,17 +580,13 @@
             requestAnimationFrame(animate);
             const dt = clock.getDelta();
             
-            // --- 核心逻辑回归 ---
-            // 只有在 SCATTER 模式下，才允许手势控制旋转
-            // TREE 模式下，强制自动旋转
+            // --- 逻辑：SCATTER模式手动，TREE模式自动 ---
             if (STATE.mode === 'SCATTER' && STATE.hand.detected) {
                 const targetRotY = STATE.hand.x * Math.PI * 0.9; 
                 const targetRotX = STATE.hand.y * Math.PI * 0.25;
-                // 手控旋转
                 STATE.rotation.y += (targetRotY - STATE.rotation.y) * 4.0 * dt;
                 STATE.rotation.x += (targetRotX - STATE.rotation.x) * 4.0 * dt;
             } else {
-                // TREE 模式自动旋转
                 if(STATE.mode === 'TREE') { 
                     STATE.rotation.y += 0.3 * dt; 
                     STATE.rotation.x += (0 - STATE.rotation.x) * 2.0 * dt; 
