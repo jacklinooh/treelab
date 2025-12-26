@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Grand Luxury Tree Final v6 (Gesture Fixed)</title>
+    <title>Grand Luxury Tree v9 (Strict Mode Fix)</title>
     <style>
         body { 
             margin: 0; overflow: hidden; background-color: #000000; 
@@ -81,6 +81,23 @@
             box-shadow: 0 0 10px rgba(255,255,255,0.8);
         }
 
+        /* 调试面板：帮助你看清现在的数值 */
+        #debug-panel {
+            position: absolute;
+            bottom: max(20px, env(safe-area-inset-bottom));
+            left: 20px;
+            color: #00ff00;
+            font-family: monospace;
+            font-size: 14px;
+            z-index: 1000;
+            text-align: left;
+            pointer-events: none;
+            background: rgba(0,0,0,0.6);
+            padding: 8px;
+            border-radius: 4px;
+            border: 1px solid #333;
+        }
+
         #loader {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             background: #000; z-index: 100;
@@ -122,6 +139,10 @@
     </div>
 
     <div id="hand-cursor"></div>
+    <div id="debug-panel">
+        Wait for Hand...
+    </div>
+
     <div id="canvas-container"></div>
 
     <div id="ui-layer">
@@ -160,7 +181,8 @@
         const STATE = {
             mode: 'TREE', focusIndex: -1, focusTarget: null,
             hand: { detected: false, x: 0, y: 0 },
-            rotation: { x: 0, y: 0 } 
+            rotation: { x: 0, y: 0 },
+            rawAvgDist: 0 // 平滑用
         };
 
         let scene, camera, renderer, composer, mainGroup; 
@@ -168,6 +190,7 @@
         let particleSystem = [], photoMeshGroup = new THREE.Group();
         let handLandmarker, video, webcamCanvas, webcamCtx, caneTexture; 
         let handCursor = document.getElementById('hand-cursor');
+        let debugPanel = document.getElementById('debug-panel');
 
         setTimeout(() => {
             const loader = document.getElementById('loader');
@@ -194,6 +217,7 @@
                 await initMediaPipe();
             } catch (err) {
                 console.warn("MediaPipe failed to load. Running without gestures.", err);
+                debugPanel.innerHTML = "Error: MediaPipe Failed";
             }
             
             const loader = document.getElementById('loader');
@@ -475,75 +499,67 @@
                 STATE.hand.detected = true;
                 const lm = result.landmarks[0];
                 
-                // --- 1. 坐标与比例修正 (针对手机竖屏优化) ---
-                // 手机竖屏时，X轴很窄，Y轴很长。如果不修正，计算出的距离是变形的。
-                // 我们获取屏幕长宽比，来修正 Y 轴的权重。
+                // 1. 坐标修正 (只在计算旋转位置时修正比例，防止移动椭圆化)
                 const aspect = window.innerWidth / window.innerHeight;
-                
                 const rawX = lm[9].x; 
                 const rawY = lm[9].y;
 
-                // 调试光标
                 if(handCursor) {
                     handCursor.style.display = 'block';
                     handCursor.style.left = ((1 - rawX) * 100) + '%';
                     handCursor.style.top = (rawY * 100) + '%';
                 }
 
-                // 旋转控制
                 STATE.hand.x = (0.5 - rawX) * 2.5; 
                 STATE.hand.y = (rawY - 0.5) * 2.5;
 
-                const wrist = lm[0];
-                const thumb = lm[4]; 
-                const index = lm[8];
-
-                // --- 2. 距离计算算法优化 ---
-                // 我们给 Y 轴距离除以 aspect (或者乘)，来抵消竖屏拉伸的影响
-                // 简单做法：只看相对距离，并大幅放宽阈值
+                const wrist = lm[0]; const thumb = lm[4]; const index = lm[8];
+                const pinchDist = Math.hypot(thumb.x - index.x, thumb.y - index.y); // 捏合不修正比例
                 
-                // 捏合计算
-                const pinchDist = Math.hypot(thumb.x - index.x, (thumb.y - index.y) * aspect);
-                
-                // 四指平均距离（判断开合）
                 const tips = [lm[8], lm[12], lm[16], lm[20]];
                 let avgDist = 0; 
                 tips.forEach(t => {
-                    // 关键修正：Y轴差异乘以长宽比，消除竖屏拉伸导致的距离虚高
-                    avgDist += Math.hypot(t.x - wrist.x, (t.y - wrist.y) * aspect);
+                    // 重要修正：计算距离时不再乘以 aspect，直接使用原始距离
+                    // 这样手机上计算出来的距离会变大，更容易触发 SCATTER
+                    avgDist += Math.hypot(t.x - wrist.x, t.y - wrist.y);
                 }); 
                 avgDist /= 4;
 
-                // --- 3. 阈值大调整 (针对手机"手太大"的问题) ---
-                // 之前的 0.32 在手机上太难触发了，因为手占满了屏幕。
-                // 现在的逻辑：
-                // 握拳 = 聚拢 (TREE)
-                // 张手 = 散开 (SCATTER)
-                
-                if (pinchDist < 0.06) { // 稍微放宽捏合
+                // 2. 数值平滑
+                STATE.rawAvgDist = STATE.rawAvgDist * 0.7 + avgDist * 0.3;
+                const smoothDist = STATE.rawAvgDist;
+
+                // 更新调试面板 (显示当前识别到的模式和距离)
+                if(debugPanel) {
+                    debugPanel.innerHTML = `Mode: ${STATE.mode}<br>Dist: ${smoothDist.toFixed(2)}<br>State: ${smoothDist > 0.40 ? 'OPEN' : 'FIST'}`;
+                    debugPanel.style.color = '#00ff00';
+                }
+
+                // 3. 状态判定 (阈值)
+                if (pinchDist < 0.05) { 
                     if (STATE.mode !== 'FOCUS') {
                         STATE.mode = 'FOCUS';
                         const photos = particleSystem.filter(p => p.type === 'PHOTO');
                         if (photos.length) STATE.focusTarget = photos[Math.floor(Math.random()*photos.length)].mesh;
                     }
                 } 
-                // 手机上手很大，所以握拳时的距离也会比电脑上大。
-                // 我把握拳阈值从 0.32 提升到了 0.45，这样即使手离得近，握拳也能触发。
-                else if (avgDist < 0.45) { 
-                    STATE.mode = 'TREE';    // 距离小 = 聚拢
+                else if (smoothDist < 0.35) { // 握拳阈值 (小于这个值变树)
+                    STATE.mode = 'TREE';    
                 } 
-                // 张手阈值也相应提升
-                else if (avgDist > 0.50) { 
-                    STATE.mode = 'SCATTER'; // 距离大 = 散开
+                else if (smoothDist > 0.40) { // 张手阈值 (大于这个值散开)
+                    STATE.mode = 'SCATTER'; 
                 }
-                
-                // 如果在 0.45 - 0.50 之间，保持上一个状态，防止闪烁
 
             } else { 
                 STATE.hand.detected = false; 
                 if(handCursor) handCursor.style.display = 'none';
+                if(debugPanel) {
+                    debugPanel.innerHTML = `Mode: ${STATE.mode}<br>Dist: --<br>No Hand`;
+                    debugPanel.style.color = '#ffff00';
+                }
             }
         }
+
         function setupEvents() {
             window.addEventListener('resize', () => {
                 camera.aspect = window.innerWidth / window.innerHeight;
@@ -563,15 +579,26 @@
         function animate() {
             requestAnimationFrame(animate);
             const dt = clock.getDelta();
+            
+            // --- 核心逻辑回归 ---
+            // 只有在 SCATTER 模式下，才允许手势控制旋转
+            // TREE 模式下，强制自动旋转
             if (STATE.mode === 'SCATTER' && STATE.hand.detected) {
                 const targetRotY = STATE.hand.x * Math.PI * 0.9; 
                 const targetRotX = STATE.hand.y * Math.PI * 0.25;
+                // 手控旋转
                 STATE.rotation.y += (targetRotY - STATE.rotation.y) * 4.0 * dt;
                 STATE.rotation.x += (targetRotX - STATE.rotation.x) * 4.0 * dt;
             } else {
-                if(STATE.mode === 'TREE') { STATE.rotation.y += 0.3 * dt; STATE.rotation.x += (0 - STATE.rotation.x) * 2.0 * dt; } 
-                else { STATE.rotation.y += 0.1 * dt; }
+                // TREE 模式自动旋转
+                if(STATE.mode === 'TREE') { 
+                    STATE.rotation.y += 0.3 * dt; 
+                    STATE.rotation.x += (0 - STATE.rotation.x) * 2.0 * dt; 
+                } else { 
+                    STATE.rotation.y += 0.1 * dt; 
+                }
             }
+
             mainGroup.rotation.y = STATE.rotation.y; mainGroup.rotation.x = STATE.rotation.x;
             particleSystem.forEach(p => p.update(dt, STATE.mode, STATE.focusTarget));
             composer.render();
