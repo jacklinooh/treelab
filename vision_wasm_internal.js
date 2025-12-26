@@ -20,3 +20,4 @@ else if (typeof define === 'function' && define['amd'])
   define([], function() { return ModuleFactory; });
 else if (typeof exports === 'object')
   exports["ModuleFactory"] = ModuleFactory;
+
