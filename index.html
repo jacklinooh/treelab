@@ -475,48 +475,75 @@
                 STATE.hand.detected = true;
                 const lm = result.landmarks[0];
                 
+                // --- 1. 坐标与比例修正 (针对手机竖屏优化) ---
+                // 手机竖屏时，X轴很窄，Y轴很长。如果不修正，计算出的距离是变形的。
+                // 我们获取屏幕长宽比，来修正 Y 轴的权重。
+                const aspect = window.innerWidth / window.innerHeight;
+                
                 const rawX = lm[9].x; 
                 const rawY = lm[9].y;
 
+                // 调试光标
                 if(handCursor) {
                     handCursor.style.display = 'block';
                     handCursor.style.left = ((1 - rawX) * 100) + '%';
                     handCursor.style.top = (rawY * 100) + '%';
                 }
 
+                // 旋转控制
                 STATE.hand.x = (0.5 - rawX) * 2.5; 
                 STATE.hand.y = (rawY - 0.5) * 2.5;
 
-                const thumb = lm[4]; const index = lm[8]; const wrist = lm[0];
-                const pinchDist = Math.hypot(thumb.x - index.x, thumb.y - index.y);
+                const wrist = lm[0];
+                const thumb = lm[4]; 
+                const index = lm[8];
+
+                // --- 2. 距离计算算法优化 ---
+                // 我们给 Y 轴距离除以 aspect (或者乘)，来抵消竖屏拉伸的影响
+                // 简单做法：只看相对距离，并大幅放宽阈值
+                
+                // 捏合计算
+                const pinchDist = Math.hypot(thumb.x - index.x, (thumb.y - index.y) * aspect);
+                
+                // 四指平均距离（判断开合）
                 const tips = [lm[8], lm[12], lm[16], lm[20]];
                 let avgDist = 0; 
-                tips.forEach(t => avgDist += Math.hypot(t.x - wrist.x, t.y - wrist.y)); 
+                tips.forEach(t => {
+                    // 关键修正：Y轴差异乘以长宽比，消除竖屏拉伸导致的距离虚高
+                    avgDist += Math.hypot(t.x - wrist.x, (t.y - wrist.y) * aspect);
+                }); 
                 avgDist /= 4;
 
-                // --- 逻辑修正部分 ---
-                if (pinchDist < 0.05) {
+                // --- 3. 阈值大调整 (针对手机"手太大"的问题) ---
+                // 之前的 0.32 在手机上太难触发了，因为手占满了屏幕。
+                // 现在的逻辑：
+                // 握拳 = 聚拢 (TREE)
+                // 张手 = 散开 (SCATTER)
+                
+                if (pinchDist < 0.06) { // 稍微放宽捏合
                     if (STATE.mode !== 'FOCUS') {
                         STATE.mode = 'FOCUS';
                         const photos = particleSystem.filter(p => p.type === 'PHOTO');
                         if (photos.length) STATE.focusTarget = photos[Math.floor(Math.random()*photos.length)].mesh;
                     }
                 } 
-                // 距离小（握拳）= TREE (聚拢)
-                else if (avgDist < 0.32) { 
-                    STATE.mode = 'TREE'; 
+                // 手机上手很大，所以握拳时的距离也会比电脑上大。
+                // 我把握拳阈值从 0.32 提升到了 0.45，这样即使手离得近，握拳也能触发。
+                else if (avgDist < 0.45) { 
+                    STATE.mode = 'TREE';    // 距离小 = 聚拢
                 } 
-                // 距离大（张手）= SCATTER (散开)
-                else if (avgDist > 0.38) { 
-                    STATE.mode = 'SCATTER'; 
+                // 张手阈值也相应提升
+                else if (avgDist > 0.50) { 
+                    STATE.mode = 'SCATTER'; // 距离大 = 散开
                 }
+                
+                // 如果在 0.45 - 0.50 之间，保持上一个状态，防止闪烁
 
             } else { 
                 STATE.hand.detected = false; 
                 if(handCursor) handCursor.style.display = 'none';
             }
         }
-
         function setupEvents() {
             window.addEventListener('resize', () => {
                 camera.aspect = window.innerWidth / window.innerHeight;
