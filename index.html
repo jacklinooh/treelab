@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Christmas Tree Final (Local Fix)</title>
+    <title>Christmas Tree v17 (Debug Mode)</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000000; font-family: 'Times New Roman', serif; -webkit-tap-highlight-color: transparent; }
         #canvas-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
@@ -17,7 +17,10 @@
         #file-input { display: none; }
         #webcam-wrapper { position: absolute; bottom: max(20px, env(safe-area-inset-bottom)); right: 20px; width: 100px; height: 75px; border: 1px solid rgba(255,255,255,0.1); overflow: hidden; opacity: 0; pointer-events: none; }
         #hand-cursor { position: absolute; width: 20px; height: 20px; background: rgba(255, 0, 0, 0.5); border: 2px solid #fff; border-radius: 50%; z-index: 999; pointer-events: none; display: none; transform: translate(-50%, -50%); box-shadow: 0 0 10px rgba(255,255,255,0.8); }
-        #debug-panel { position: absolute; bottom: max(20px, env(safe-area-inset-bottom)); left: 20px; color: #ffa500; font-family: monospace; font-size: 14px; z-index: 1000; text-align: left; pointer-events: none; background: rgba(0,0,0,0.6); padding: 8px; border-radius: 4px; border: 1px solid #333; transition: opacity 0.5s; }
+        
+        /* 调试面板加大加宽，显示完整错误 */
+        #debug-panel { position: absolute; bottom: max(20px, env(safe-area-inset-bottom)); left: 10px; right: 10px; color: #ffa500; font-family: monospace; font-size: 12px; z-index: 1000; text-align: left; pointer-events: none; background: rgba(0,0,0,0.8); padding: 10px; border-radius: 4px; border: 1px solid #333; transition: opacity 0.5s; white-space: pre-wrap; word-break: break-all; }
+        
         #loader { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: opacity 0.8s ease-out; }
         .loader-text { color: #d4af37; font-size: 14px; letter-spacing: 4px; margin-top: 20px; text-transform: uppercase; }
         .spinner { width: 40px; height: 40px; border: 1px solid rgba(212, 175, 55, 0.2); border-top: 1px solid #d4af37; border-radius: 50%; animation: spin 1s linear infinite; }
@@ -38,7 +41,7 @@
     <audio id="bgm" loop autoplay><source src="./music.mp3" type="audio/mpeg"></audio>
     <div id="loader"><div class="spinner"></div><div class="loader-text">Loading Holiday Magic</div></div>
     <div id="hand-cursor"></div>
-    <div id="debug-panel">Initializing...</div>
+    <div id="debug-panel">Initializing Debug Mode...</div>
     <div id="canvas-container"></div>
     <div id="ui-layer">
         <h1>Merry Christmas</h1>
@@ -84,18 +87,21 @@
             webcamCanvas.width = 160; webcamCanvas.height = 120;
 
             try {
-                // Step 1: 加载本地引擎 wasm
-                debugPanel.innerHTML = "Step 1: Init Engine...";
+                // Step 1: 尝试加载本地引擎
+                debugPanel.innerHTML = "Step 1: Init Engine (.wasm + .js)...";
+                // 使用 ./ 同时寻找 .js 和 .wasm
                 const vision = await FilesetResolver.forVisionTasks("./"); 
 
-                // Step 2: 加载本地模型 task
-                debugPanel.innerHTML = "Step 2: Download AI...";
-                // 确保这里的名字和你仓库里的一模一样
+                // Step 2: 尝试下载模型
+                debugPanel.innerHTML = "Step 2: Checking AI Model...";
                 const modelUrl = "./hand_landmarker.task"; 
-
                 const response = await fetch(modelUrl);
-                if (!response.ok) throw new Error(`File Not Found: ${response.status}`);
                 
+                if (!response.ok) {
+                    throw new Error(`Model 404: ${response.status}`);
+                }
+                
+                debugPanel.innerHTML = "Step 3: Downloading AI Model...";
                 const contentLength = response.headers.get('content-length');
                 const total = contentLength ? parseInt(contentLength, 10) : 0;
                 let loaded = 0;
@@ -110,7 +116,7 @@
                     
                     if(total > 0) {
                         const percent = Math.round((loaded / total) * 100);
-                        debugPanel.innerHTML = `AI Loading: ${percent}%`;
+                        debugPanel.innerHTML = `AI Downloading: ${percent}%`;
                     } else {
                         const mb = (loaded / (1024 * 1024)).toFixed(2);
                         debugPanel.innerHTML = `AI Loaded: ${mb} MB`;
@@ -119,7 +125,8 @@
                 const blob = new Blob(chunks);
                 const url = URL.createObjectURL(blob);
 
-                // Step 3: 启动
+                // Step 4: 启动
+                debugPanel.innerHTML = "Step 4: Starting AI...";
                 handLandmarker = await HandLandmarker.createFromOptions(vision, {
                     baseOptions: { modelAssetPath: url, delegate: "CPU" },
                     runningMode: "VIDEO", numHands: 1
@@ -136,13 +143,14 @@
                 }
 
             } catch (err) {
-                console.warn("Init Failed", err);
-                debugPanel.innerHTML = "Missing Files! Clear Cache";
+                console.warn(err);
+                // 把真实的错误原因显示在屏幕上
+                debugPanel.innerHTML = "ERROR:\n" + err.toString();
                 debugPanel.style.color = "red";
             }
         }
 
-        // --- 其余逻辑 ---
+        // --- Standard Logic ---
         let lastVideoTime = -1;
         async function predictWebcam() { if (video.currentTime !== lastVideoTime && video.readyState >= 2) { lastVideoTime = video.currentTime; if (handLandmarker) { try { const result = handLandmarker.detectForVideo(video, performance.now()); processGestures(result); } catch(e) { } } } requestAnimationFrame(predictWebcam); }
         function processGestures(result) {
