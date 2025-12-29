@@ -44,7 +44,7 @@
     <div id="debug-panel">Initializing Debug Mode...</div>
     <div id="canvas-container"></div>
     <div id="ui-layer">
-        <h1>Merry Christmas</h1>
+        <h1>Merry Christmas v20</h1>
         <div class="upload-wrapper">
             <label class="upload-btn">Add Memories<input type="file" id="file-input" multiple accept="image/*"></label>
             <div class="hint-text">Touch Screen for Music</div>
@@ -153,58 +153,64 @@
         // --- Standard Logic ---
         let lastVideoTime = -1;
         async function predictWebcam() { if (video.currentTime !== lastVideoTime && video.readyState >= 2) { lastVideoTime = video.currentTime; if (handLandmarker) { try { const result = handLandmarker.detectForVideo(video, performance.now()); processGestures(result); } catch(e) { } } } requestAnimationFrame(predictWebcam); }
-        // 【核心修改】防抖动版手势逻辑
+        // 【v22 修复版】逻辑顺序重组：优先判拳头，彻底解决冲突
         function processGestures(result) {
             if (result.landmarks && result.landmarks.length > 0) {
                 STATE.hand.detected = true;
                 const lm = result.landmarks[0];
                 
-                // 1. 算出手掌大小（作为尺子）
+                // 1. 📏 尺子：算出手掌大小 (手腕到中指根部)
+                // 用来做所有距离的参考，解决“远近不准”的问题
                 const palmSize = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y);
                 
-                // 2. 算出关键距离
-                // 捏合距离 (拇指-食指)
-                const pinchDist = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
-                
-                // 指尖平均距离 (四指-手腕)
+                // 2. ✊ 拳头数据：算出四个指尖到手腕的平均距离
                 const wrist = lm[0];
-                const tips = [lm[8], lm[12], lm[16], lm[20]];
+                const tips = [lm[8], lm[12], lm[16], lm[20]]; // 食中无小
                 let avgTipDist = 0;
                 tips.forEach(t => { avgTipDist += Math.hypot(t.x - wrist.x, t.y - wrist.y); });
                 avgTipDist /= 4;
+
+                // 3. 👌 捏合数据：算出拇指尖和食指尖的距离
+                const pinchDist = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
                 
-                // --- 核心改动：防抖逻辑 ---
-                
-                // 【判断1：捏合】
-                // 阈值设为 0.35 (稍微宽容一点，防止远距离捏不住)
-                if (pinchDist < (palmSize * 0.35)) {
+                // --- ⚖️ 核心判决逻辑 (顺序非常重要！) ---
+
+                // 【第一步】先看是不是握拳 (FIST) -> 变圣诞树
+                // 阈值：1.0 倍手掌。只要指尖离手腕够近，就是拳头。
+                // 即使这时候你捏着手指，因为满足了拳头条件，代码会直接执行这里，跳过后面的捏合！
+                if (avgTipDist < (palmSize * 1.0)) {
+                    STATE.mode = 'TREE';
+                }
+                // 【第二步】如果不是拳头，再看是不是捏合 (PINCH) -> 聚焦照片
+                // 阈值：0.35 倍手掌。
+                else if (pinchDist < (palmSize * 0.35)) {
+                    // 只有当不是拳头的时候，才允许触发捏合
                     if (STATE.mode !== 'FOCUS') {
                         STATE.mode = 'FOCUS';
                         const photos = particleSystem.filter(p => p.type === 'PHOTO');
                         if (photos.length) STATE.focusTarget = photos[Math.floor(Math.random()*photos.length)].mesh;
                     }
-                } 
-                // 【判断2：握拳】
-                // 必须很紧 (小于 1.0) 才会触发变成树
-                // 如果你在 1.1 左右徘徊，它不会触发，会保持上一个状态
-                else if (avgTipDist < (palmSize * 1.0)) {
-                    STATE.mode = 'TREE';
-                } 
-                // 【判断3：张开】
-                // 必须张很大 (大于 1.6) 才会触发散开
-                // 只有当你真的用力张手时，才会切换
+                }
+                // 【第三步】最后看是不是张开 (OPEN) -> 散开粒子
+                // 阈值：1.6 倍手掌。必须张得很大才触发。
                 else if (avgTipDist > (palmSize * 1.6)) {
                     STATE.mode = 'SCATTER';
                 }
-                
-                // 【重要】
-                // 如果距离在 1.0 到 1.6 之间，代码会直接跳过，
-                // 保持你上一次的状态（树还是散开），绝对不会乱跳！
 
-                // 更新红点位置
-                const rawX = lm[9].x; const rawY = lm[9].y;
-                if(handCursor) { handCursor.style.display = 'block'; handCursor.style.left = ((1 - rawX) * 100) + '%'; handCursor.style.top = (rawY * 100) + '%'; }
-                STATE.hand.x = (0.5 - rawX) * 2.5; STATE.hand.y = (rawY - 0.5) * 2.5;
+                // --- 🔴 红点位置回归 ---
+                // 改回 lm[9] (中指根部)，完全听你的
+                const rawX = lm[9].x; 
+                const rawY = lm[9].y;
+
+                if(handCursor) { 
+                    handCursor.style.display = 'block'; 
+                    handCursor.style.left = ((1 - rawX) * 100) + '%'; 
+                    handCursor.style.top = (rawY * 100) + '%'; 
+                }
+                
+                // 3D 旋转控制
+                STATE.hand.x = (0.5 - rawX) * 2.5; 
+                STATE.hand.y = (rawY - 0.5) * 2.5;
 
             } else { 
                 STATE.hand.detected = false; 
