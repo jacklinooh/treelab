@@ -153,54 +153,58 @@
         // --- Standard Logic ---
         let lastVideoTime = -1;
         async function predictWebcam() { if (video.currentTime !== lastVideoTime && video.readyState >= 2) { lastVideoTime = video.currentTime; if (handLandmarker) { try { const result = handLandmarker.detectForVideo(video, performance.now()); processGestures(result); } catch(e) { } } } requestAnimationFrame(predictWebcam); }
-        // 【改动点 2】全新的手势逻辑，按照手掌比例来判断，远近都准
+        // 【核心修改】防抖动版手势逻辑
         function processGestures(result) {
             if (result.landmarks && result.landmarks.length > 0) {
                 STATE.hand.detected = true;
                 const lm = result.landmarks[0];
                 
                 // 1. 算出手掌大小（作为尺子）
-                // 手腕(0) 到 中指根部(9) 的距离
                 const palmSize = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y);
                 
-                // 2. 捏合判断 (Pinch)
-                // 如果 拇指尖(4) 和 食指尖(8) 的距离 小于 0.3 倍手掌
-                const thumbTip = lm[4];
-                const indexTip = lm[8];
-                const pinchDist = Math.hypot(thumbTip.x - indexTip.x, thumbTip.y - indexTip.y);
-                const isPinch = pinchDist < (palmSize * 0.3);
-
-                // 3. 握拳/张开判断
-                // 算出 四个指尖(8,12,16,20) 到 手腕(0) 的平均距离
+                // 2. 算出关键距离
+                // 捏合距离 (拇指-食指)
+                const pinchDist = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
+                
+                // 指尖平均距离 (四指-手腕)
                 const wrist = lm[0];
                 const tips = [lm[8], lm[12], lm[16], lm[20]];
                 let avgTipDist = 0;
                 tips.forEach(t => { avgTipDist += Math.hypot(t.x - wrist.x, t.y - wrist.y); });
                 avgTipDist /= 4;
                 
-                // 开始判断
-                if (isPinch) {
-                    // 捏合 = 聚焦照片
+                // --- 核心改动：防抖逻辑 ---
+                
+                // 【判断1：捏合】
+                // 阈值设为 0.35 (稍微宽容一点，防止远距离捏不住)
+                if (pinchDist < (palmSize * 0.35)) {
                     if (STATE.mode !== 'FOCUS') {
                         STATE.mode = 'FOCUS';
                         const photos = particleSystem.filter(p => p.type === 'PHOTO');
                         if (photos.length) STATE.focusTarget = photos[Math.floor(Math.random()*photos.length)].mesh;
                     }
-                } else if (avgTipDist < (palmSize * 1.1)) {
-                    // 指尖离手腕很近 (< 1.1倍手掌) = 握拳 = 变圣诞树
+                } 
+                // 【判断2：握拳】
+                // 必须很紧 (小于 1.0) 才会触发变成树
+                // 如果你在 1.1 左右徘徊，它不会触发，会保持上一个状态
+                else if (avgTipDist < (palmSize * 1.0)) {
                     STATE.mode = 'TREE';
-                } else if (avgTipDist > (palmSize * 1.5)) {
-                    // 指尖离手腕很远 (> 1.5倍手掌) = 张开 = 散开粒子
+                } 
+                // 【判断3：张开】
+                // 必须张很大 (大于 1.6) 才会触发散开
+                // 只有当你真的用力张手时，才会切换
+                else if (avgTipDist > (palmSize * 1.6)) {
                     STATE.mode = 'SCATTER';
                 }
+                
+                // 【重要】
+                // 如果距离在 1.0 到 1.6 之间，代码会直接跳过，
+                // 保持你上一次的状态（树还是散开），绝对不会乱跳！
 
-                // 更新红点位置和手势坐标
+                // 更新红点位置
                 const rawX = lm[9].x; const rawY = lm[9].y;
                 if(handCursor) { handCursor.style.display = 'block'; handCursor.style.left = ((1 - rawX) * 100) + '%'; handCursor.style.top = (rawY * 100) + '%'; }
                 STATE.hand.x = (0.5 - rawX) * 2.5; STATE.hand.y = (rawY - 0.5) * 2.5;
-
-                // 屏幕调试信息 (可选)
-                // debugPanel.innerHTML = `Palm: ${palmSize.toFixed(3)}\nTipDist: ${avgTipDist.toFixed(3)}\nMode: ${STATE.mode}`;
 
             } else { 
                 STATE.hand.detected = false; 
