@@ -44,7 +44,7 @@
     <div id="debug-panel">Initializing Debug Mode...</div>
     <div id="canvas-container"></div>
     <div id="ui-layer">
-        <h1>Merry Christmas v20</h1>
+        <h1>Merry Christmas v21</h1>
         <div class="upload-wrapper">
             <label class="upload-btn">Add Memories<input type="file" id="file-input" multiple accept="image/*"></label>
             <div class="hint-text">Touch Screen for Music</div>
@@ -217,7 +217,46 @@
                 if(handCursor) handCursor.style.display = 'none'; 
             }
         }
-        function animate() { requestAnimationFrame(animate); const dt = clock.getDelta(); if (STATE.mode === 'SCATTER' && STATE.hand.detected) { const targetRotY = STATE.hand.x * Math.PI * 0.9; const targetRotX = STATE.hand.y * Math.PI * 0.25; STATE.rotation.y += (targetRotY - STATE.rotation.y) * 4.0 * dt; STATE.rotation.x += (targetRotX - STATE.rotation.x) * 4.0 * dt; } else { if(STATE.mode === 'TREE') { STATE.rotation.y += 0.3 * dt; STATE.rotation.x += (0 - STATE.rotation.x) * 2.0 * dt; } else { STATE.rotation.y += 0.1 * dt; } } mainGroup.rotation.y = STATE.rotation.y; mainGroup.rotation.x = STATE.rotation.x; particleSystem.forEach(p => p.update(dt, STATE.mode, STATE.focusTarget)); composer.render(); }
+        function animate() { 
+            requestAnimationFrame(animate); 
+            const dt = clock.getDelta(); 
+
+            // 如果是散开模式且检测到手 -> 进入“手动操控”
+            if (STATE.mode === 'SCATTER' && STATE.hand.detected) { 
+                // 【核心修改】改为速度控制 (像摇杆一样)
+                // 1. Y轴 (左右旋转)：
+                // STATE.hand.x 是手离中心的距离。我们用它来控制旋转速度，而不是角度。
+                // 乘以 3.0 是灵敏度，你可以自己调
+                const rotateSpeed = STATE.hand.x * 3.0;
+                
+                // 直接在当前角度上累加，绝不重置，所以不会抽搐！
+                STATE.rotation.y += rotateSpeed * dt; 
+
+                // 2. X轴 (上下倾斜)：
+                // 这个依然保持跟随手指，因为倾斜角度范围小，不会抽搐
+                const targetRotX = STATE.hand.y * Math.PI * 0.25; 
+                STATE.rotation.x += (targetRotX - STATE.rotation.x) * 5.0 * dt; 
+
+            } else { 
+                // 没手的时候，或者变回树的时候
+                if(STATE.mode === 'TREE') { 
+                    // 自动旋转
+                    STATE.rotation.y += 0.3 * dt; 
+                    // 慢慢回正 X 轴
+                    STATE.rotation.x += (0 - STATE.rotation.x) * 2.0 * dt; 
+                } else { 
+                    // 散开但没手 (惯性空转)
+                    STATE.rotation.y += 0.1 * dt; 
+                } 
+            } 
+
+            // 应用计算好的角度
+            mainGroup.rotation.y = STATE.rotation.y; 
+            mainGroup.rotation.x = STATE.rotation.x; 
+            
+            particleSystem.forEach(p => p.update(dt, STATE.mode, STATE.focusTarget)); 
+            composer.render(); 
+        }
         function tryAutoPlay() { const audio = document.getElementById('bgm'); audio.volume = 0.5; const playPromise = audio.play(); if (playPromise !== undefined) { playPromise.catch(error => { const playOnInteraction = () => { audio.play(); window.removeEventListener('click', playOnInteraction); window.removeEventListener('touchstart', playOnInteraction); window.removeEventListener('keydown', playOnInteraction); }; window.addEventListener('click', playOnInteraction); window.addEventListener('touchstart', playOnInteraction); window.addEventListener('keydown', playOnInteraction); }); } }
         function initThree() { const container = document.getElementById('canvas-container'); scene = new THREE.Scene(); scene.background = new THREE.Color(CONFIG.colors.bg); scene.fog = new THREE.FogExp2(CONFIG.colors.bg, 0.01); camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 1000); camera.position.set(0, 2, CONFIG.camera.z); renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" }); renderer.setSize(window.innerWidth, window.innerHeight); renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); renderer.toneMapping = THREE.ReinhardToneMapping; renderer.toneMappingExposure = 2.2; container.appendChild(renderer.domElement); mainGroup = new THREE.Group(); scene.add(mainGroup); }
         function setupEnvironment() { const pmremGenerator = new THREE.PMREMGenerator(renderer); scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture; }
