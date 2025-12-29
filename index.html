@@ -153,29 +153,32 @@
         // --- Standard Logic ---
         let lastVideoTime = -1;
         async function predictWebcam() { if (video.currentTime !== lastVideoTime && video.readyState >= 2) { lastVideoTime = video.currentTime; if (handLandmarker) { try { const result = handLandmarker.detectForVideo(video, performance.now()); processGestures(result); } catch(e) { } } } requestAnimationFrame(predictWebcam); }
+        // 【改动点 2】全新的手势逻辑，按照手掌比例来判断，远近都准
         function processGestures(result) {
             if (result.landmarks && result.landmarks.length > 0) {
                 STATE.hand.detected = true;
                 const lm = result.landmarks[0];
                 
-                // 手掌基准尺度：手腕(0) 到 中指根部(9) 的距离
+                // 1. 算出手掌大小（作为尺子）
+                // 手腕(0) 到 中指根部(9) 的距离
                 const palmSize = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y);
                 
-                // 1. 捏合检测 (相对阈值：0.3倍手掌)
+                // 2. 捏合判断 (Pinch)
+                // 如果 拇指尖(4) 和 食指尖(8) 的距离 小于 0.3 倍手掌
                 const thumbTip = lm[4];
                 const indexTip = lm[8];
                 const pinchDist = Math.hypot(thumbTip.x - indexTip.x, thumbTip.y - indexTip.y);
                 const isPinch = pinchDist < (palmSize * 0.3);
 
-                // 2. 握拳/张开检测 (指尖到手腕平均距离)
+                // 3. 握拳/张开判断
+                // 算出 四个指尖(8,12,16,20) 到 手腕(0) 的平均距离
                 const wrist = lm[0];
-                const tips = [lm[8], lm[12], lm[16], lm[20]]; // 食中无小
+                const tips = [lm[8], lm[12], lm[16], lm[20]];
                 let avgTipDist = 0;
                 tips.forEach(t => { avgTipDist += Math.hypot(t.x - wrist.x, t.y - wrist.y); });
                 avgTipDist /= 4;
                 
-                // 相对阈值判断
-                let currentGesture = "UNKNOWN";
+                // 开始判断
                 if (isPinch) {
                     // 捏合 = 聚焦照片
                     if (STATE.mode !== 'FOCUS') {
@@ -183,25 +186,21 @@
                         const photos = particleSystem.filter(p => p.type === 'PHOTO');
                         if (photos.length) STATE.focusTarget = photos[Math.floor(Math.random()*photos.length)].mesh;
                     }
-                    currentGesture = "PINCH";
                 } else if (avgTipDist < (palmSize * 1.1)) {
-                    // 距离小 = 握拳 = 变树
+                    // 指尖离手腕很近 (< 1.1倍手掌) = 握拳 = 变圣诞树
                     STATE.mode = 'TREE';
-                    currentGesture = "FIST";
                 } else if (avgTipDist > (palmSize * 1.5)) {
-                    // 距离大 = 张开 = 散开
+                    // 指尖离手腕很远 (> 1.5倍手掌) = 张开 = 散开粒子
                     STATE.mode = 'SCATTER';
-                    currentGesture = "OPEN";
                 }
 
-                // 更新坐标
+                // 更新红点位置和手势坐标
                 const rawX = lm[9].x; const rawY = lm[9].y;
                 if(handCursor) { handCursor.style.display = 'block'; handCursor.style.left = ((1 - rawX) * 100) + '%'; handCursor.style.top = (rawY * 100) + '%'; }
                 STATE.hand.x = (0.5 - rawX) * 2.5; STATE.hand.y = (rawY - 0.5) * 2.5;
 
-                // 调试信息 (如果你觉得不准，可以截图看这个数值)
-                // debugPanel.innerHTML = `G: ${currentGesture}\nPalm: ${palmSize.toFixed(3)}\nTip: ${avgTipDist.toFixed(3)}`;
-                // debugPanel.style.opacity = 1; 
+                // 屏幕调试信息 (可选)
+                // debugPanel.innerHTML = `Palm: ${palmSize.toFixed(3)}\nTipDist: ${avgTipDist.toFixed(3)}\nMode: ${STATE.mode}`;
 
             } else { 
                 STATE.hand.detected = false; 
